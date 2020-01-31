@@ -1,12 +1,40 @@
+import pandas as pd
+import sys
 import datetime
+import argparse
 import random
 
 
+class Item():
+
+    def __init__(self, key, pos):
+        self.k = key
+        self.p = pos
+
+    def __str__(self):
+        return "[k:" + str(self.k) + " p:" + str(self.p) + ']'
+
+    def __eq__(self, other):
+        return self.k == other.k
+
+    def __gt__(self, other):
+        return self.k > other.k
+
+    def __ge__(self, other):
+        return self.k >= other.k
+
+    def __lt__(self, other):
+        return self.k < other.k
+
+    def __le__(self, other):
+        return self.k <= other.k
+
+
 class BTreeNode(object):
+    __slots__ = ["isLeaf", "keys", "children", "size", "_index"]
 
     def __init__(self, t, isLeaf=False):
         self.isLeaf = isLeaf
-        self.index = None
         self.keys = []
         self.children = []
         self.size = t
@@ -17,23 +45,23 @@ class BTreeNode(object):
 
     @property
     def index(self):
-        return self.__index
+        return self._index
 
     @index.setter
     def index(self, i):
-        assert (i == None) or isinstance(i, int)
-        self.__index = i
+        self._index = i
 
 
 class BTree(object):
-    __slots__ = ["root", "t", "nodes", "index_count"]
+    __slots__ = ["root", "t", "nodes", "index_count", "key_count"]
 
     def __init__(self, t):
         self.root = BTreeNode(t, isLeaf=True)
         self.root.index = 0
         self.t = t
-        self.nodes = {0: self.root}
+        self.nodes = {}
         self.index_count = 0
+        self.key_count = 0
 
     def alloc_node(self, isLeaf=False):
         new_node = BTreeNode(self.t, isLeaf=isLeaf)
@@ -45,20 +73,23 @@ class BTree(object):
     def search(self, k, node=None):
         if node is None:
             node = self.root
+        if not isinstance(k, Item):
+            k = Item(k, 0)
         i = 0
         while i < len(node.keys) and k > node.keys[i]:
             i += 1
         if i < len(node.keys) and k == node.keys[i]:  # found key
-            return (node.index, i)
+            return node.keys[i].p
+            # return (node.index, i)
         elif node.isLeaf:  # If the node is leaf, there are no more key to look for
             return None
         else:
             return self.search(k, node.children[i])
 
     def insert(self, k):
-        search_result = self.search(k)
-        if search_result is not None:
-            return None
+        # search_result = self.search(k)
+        # if search_result is not None:
+        #     return None
         r = self.root
         if r.is_full:
             s = self.alloc_node()
@@ -73,11 +104,12 @@ class BTree(object):
         i = len(x.keys) - 1
         if x.isLeaf:
             # insert a key
-            x.keys.append(-1)
+            x.keys.append(Item(-1, -1))
             while i >= 0 and k < x.keys[i]:
                 x.keys[i + 1] = x.keys[i]
                 i -= 1
             x.keys[i + 1] = k
+            self.key_count += 1
         else:
             # insert a child
             while i >= 0 and k < x.keys[i]:
@@ -90,23 +122,22 @@ class BTree(object):
             self._insert_nonfull(x.children[i], k)
 
     def _split_child(self, p_node, i):
-        t = self.t
+        mid = self.t - 1
         r_node = p_node.children[i]
         l_node = self.alloc_node(isLeaf=r_node.isLeaf)
 
         # slide all children of node to the right and insert z at i+1.
         p_node.children.insert(i + 1, l_node)
-        p_node.keys.insert(i, r_node.keys[t - 1])
+        p_node.keys.insert(i, r_node.keys[mid])
 
-        # keys of z are t to 2t - 1,
-        # y is then 0 to t-2
-        l_node.keys = r_node.keys[t:]
-        r_node.keys = r_node.keys[0:(t - 2)]
+        # keys after middle key store in l node
+        # keys before middle key store in r node
+        l_node.keys = r_node.keys[(mid + 1):]
+        r_node.keys = r_node.keys[0:(mid - 1)]
 
-        # children of z are t to 2t els of y.children
         if not r_node.isLeaf:
-            l_node.children = r_node.children[t:]
-            r_node.children = r_node.children[0:(t - 1)]
+            l_node.children = r_node.children[(mid + 1):]
+            r_node.children = r_node.children[0:mid]
 
     def __str__(self):
         this_level = [self.root]
@@ -122,7 +153,9 @@ class BTree(object):
                 if node.children:
                     next_level.extend(node.children)
                     next_level.append(None)
-                output += str(node.keys) + " "
+
+                output += '(' + ' '.join([str(k) for k in node.keys]) + ')'
+                # output += str(node.keys) + " "
             s += "Level {}: ".format(i) + output + '\n'
             this_level = next_level
             i += 1
@@ -130,49 +163,56 @@ class BTree(object):
         return s
 
 
-# def binary_search(array, x):
-#     lo, hi = 0, len(array)
-#     while lo <= hi:
-#         m = (lo + hi) // 2
-#         if array[m] == x:
-#             return m
-#         elif x > array[m]:
-#             lo = m + 1
-#         else:
-#             hi = m - 1
-#     return None
-
-
-def main():
+def main(path, t):
     # Build BTree
-    b = BTree(3)
+    data = pd.read_csv(path, header=None)
+    # print(data.loc[data[0] == 699])
+    total_data_size = data.shape[0]
+    test_data_size = int(0.1 * total_data_size)
+    test_data = data.sample(n=test_data_size)
+
+    print("Total data size: ", total_data_size)
+    print("Test data size: ", test_data_size)
+
+    btree = BTree(t)
 
     start = datetime.datetime.now()
-    for i in range(100):
-        key = random.randint(0, 100)
-        print(key)
-        b.insert(key)
-        print(b)
+    for index, row in data.iterrows():
+        btree.insert(Item(row[0], row[1]))
     end = datetime.datetime.now()
-
-    print("BTree build time: " + str(end - start))
+    print(btree)
+    print("BTree build time: " + str(end - start) + "\n")
+    print("Btree total keys: ", btree.key_count)
 
     # Search Key
-    search_key = 8
-
+    print("Search for keys")
+    search_result = {}
     search_start = datetime.datetime.now()
-    result = b.search(search_key)
+    for index, row in test_data.iterrows():
+        search_key = row[0]
+        search_result[search_key] = btree.search(search_key)
     search_end = datetime.datetime.now()
+    print(search_result)
 
-    if result is not None:
-        ix, pos = result
-        result_key = b.nodes[ix].keys[pos]
-        print("Search Key : {0}, Result pos: {1}, Correct: {2}".format(
-            search_key, result, (result_key == search_key)))
-        print("Key search time: " + str(search_end - search_start))
-    else:
-        print("Key {} not found".format(search_key))
+    print("Keys' search time: " + str(search_end - search_start))
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Build Btree')
+    parser.add_argument('-p',
+                        '--path',
+                        type=str,
+                        required=True,
+                        help='data path')
+    parser.add_argument('-t',
+                        '--degree',
+                        type=int,
+                        required=True,
+                        dest='degree',
+                        help='degree of BTree')
+
+    args = parser.parse_args()
+
+    path = args.path
+    t = args.degree
+    main(path, t)
