@@ -80,16 +80,15 @@ class BTree(object):
             i += 1
         if i < len(node.keys) and k == node.keys[i]:  # found key
             return node.keys[i].p
-            # return (node.index, i)
         elif node.isLeaf:  # If the node is leaf, there are no more key to look for
             return None
         else:
             return self.search(k, node.children[i])
 
     def insert(self, k):
-        # search_result = self.search(k)
-        # if search_result is not None:
-        #     return None
+        search_result = self.search(k)
+        if search_result is not None:
+            return None
         r = self.root
         if r.is_full:
             s = self.alloc_node()
@@ -126,7 +125,8 @@ class BTree(object):
         r_node = p_node.children[i]
         l_node = self.alloc_node(isLeaf=r_node.isLeaf)
 
-        # slide all children of node to the right and insert z at i+1.
+        # insert left node to parent node at i + 1
+        # insert mid key of right node to its parent node
         p_node.children.insert(i + 1, l_node)
         p_node.keys.insert(i, r_node.keys[mid])
 
@@ -165,11 +165,10 @@ class BTree(object):
 
 def main(path, t):
     # Build BTree
+    print("Loading data file from: {}".format(str(path)))
     data = pd.read_csv(path, header=None)
-    # print(data.loc[data[0] == 699])
     total_data_size = data.shape[0]
     test_data_size = int(0.1 * total_data_size)
-    test_data = data.sample(n=test_data_size)
 
     print("Total data size: ", total_data_size)
     print("Test data size: ", test_data_size)
@@ -180,19 +179,22 @@ def main(path, t):
     for index, row in data.iterrows():
         btree.insert(Item(row[0], row[1]))
     end = datetime.datetime.now()
-    print(btree)
+    # print(btree)
+    print("BTree degree: {}".format(t))
+    print("BTree total keys: {}".format(btree.key_count))
     print("BTree build time: " + str(end - start) + "\n")
-    print("Btree total keys: ", btree.key_count)
 
     # Search Key
     print("Search for keys")
+    test_data = data.sample(n=test_data_size)
     search_result = {}
     search_start = datetime.datetime.now()
     for index, row in test_data.iterrows():
         search_key = row[0]
         search_result[search_key] = btree.search(search_key)
     search_end = datetime.datetime.now()
-    print(search_result)
+    print(list(k for k, v in search_result.items() if v is None))
+    # print(data.loc[data[0] == 699])
 
     print("Keys' search time: " + str(search_end - search_start))
 
