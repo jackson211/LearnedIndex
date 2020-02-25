@@ -1,4 +1,4 @@
-# LearnedIndex
+# Learned Index
 
 ## To run BTree
 Example:

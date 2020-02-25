@@ -214,7 +214,6 @@ if __name__ == "__main__":
                         help='degree of BTree')
 
     args = parser.parse_args()
-
     path = args.path
     t = args.degree
     main(path, t)

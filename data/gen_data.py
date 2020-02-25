@@ -17,9 +17,6 @@ class Distribution(Enum):
     POISSON = 4
     RANDOM = 5
 
-    # def to_string(self, val):
-    #     return val_name[val].lower()
-
 
 val_name = {
     Distribution.BINOMIAL: "binomial",
@@ -56,6 +53,7 @@ def get_sorted_data(distribution, size):
 
 def generate_data(distribution, data_size=DATA_SIZE):
     data = get_sorted_data(distribution, data_size)
+    print(data)
 
     multiplicant = 1
     if distribution == Distribution.EXPONENTIAL:
