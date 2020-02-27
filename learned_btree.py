@@ -195,22 +195,31 @@ def test(checkpoint_path):
 def hybrid_training(cfg, train_x, train_y, val_x, val_y, threshold=1):
     M = len(cfg.stages)
     col_num = cfg.stages[1]
-    tmp_x = [[None for i in range(j)] for j in cfg.stages]
-    tmp_y = [[None for i in range(j)] for j in cfg.stages]
+    tmp_x = [[[] for i in range(j)] for j in cfg.stages]
+    tmp_y = [[[] for i in range(j)] for j in cfg.stages]
     tmp_x[0][0] = train_x
     tmp_y[0][0] = train_y
     index = [[None for i in range(j)] for j in cfg.stages]
     for i in range(M):
         for j in range(cfg.stages[i]):
-            print(i, j)
             model, criterion, optimizer = build_model(cfg, level=i)
-            index[i][j] = train(cfg, tmp_x[i][j], tmp_y[i][j], val_x, val_y,
-                                model, criterion, optimizer)
+            if len(tmp_x[i][j]) != 0:
+                index[i][j] = train(cfg, tmp_x[i][j], tmp_y[i][j], val_x, val_y,
+                                    model, criterion, optimizer)
+            if i < M - 1:
+                for r in range(len(tmp_x[i][j])):
+                    p = int(index[i][j](tmp_x[i][j][r]).item() * cfg.block_size)
+                    if p > cfg.stages[i + 1] - 1:
+                        p = cfg.stages[i + 1] - 1
 
-            for r in range(len(tmp_x[i][j])):
-                p = int(index[i][j](tmp_x[i][j][r]).item() // cfg.stages[i + 1])
-                tmp_x[i + 1][p] = tmp_x[i][j][r]
-                tmp_y[i + 1][p] = tmp_y[i][j][r]
+                    tmp_x[i + 1][p].append(tmp_x[i][j][r])
+                    tmp_y[i + 1][p].append(tmp_y[i][j][r])
+                for k in range(len(tmp_x[i + 1])):
+                    if tmp_x[i + 1][k]:
+                        tmp_x[i + 1][k] = torch.stack(tmp_x[i + 1][k])
+                        tmp_y[i + 1][k] = torch.stack(tmp_y[i + 1][k])
+                    else:
+                        tmp_x[i + 1][k] = torch.tensor([])
     return index
 
 
@@ -238,7 +247,7 @@ def main(path, config):
     print("-" * 20 + "Config" + "-" * 20)
     print(cfg)
 
-    model, criterion, optimizer = build_model(cfg, level=0)
+    # model, criterion, optimizer = build_model(cfg, level=0)
 
     # train(cfg, train_x, train_y, val_x, val_y, model, criterion, optimizer)
     # stages = [1, 100]
@@ -252,16 +261,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     config = {
-        'n_layer': [3, 1],
+        'n_layer': [2, 1],
         'D_in': 1,
-        'H': 16,
+        'H': 32,
         'D_out': 1,
         'n_epochs': 500,
         'batch_size': 32,
         'learning_rate': 1e-4,
         'weight_decay': 1e-5,
         'stop_step': 10,
-        'stages': [1, 100],
+        'stages': [1, 10],
         'total_number': 1000,
         'block_size': 100
     }
