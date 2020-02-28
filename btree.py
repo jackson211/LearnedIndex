@@ -56,6 +56,7 @@ class BTree(object):
     __slots__ = ["root", "t", "nodes", "index_count", "key_count"]
 
     def __init__(self, t):
+        super(BTree, self).__init__()
         self.root = BTreeNode(t, isLeaf=True)
         self.root.index = 0
         self.t = t

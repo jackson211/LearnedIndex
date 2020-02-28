@@ -10,6 +10,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn import metrics
 from NN import NN
+from btree import BTree, Item
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(1234)
@@ -45,8 +46,8 @@ def naive_models(path):
           np.sqrt(metrics.mean_squared_error(y_val, y_pred)))
 
 
-def pd_to_tensor(values, requires_grad=True):
-    # convert pandas column values to [n, 1] shape tensor
+def list_to_tensor(values, requires_grad=True):
+    # convert a list of values to [n, 1] shape tensor
     return Variable(torch.FloatTensor(values).to(device).view(-1, 1),
                     requires_grad=requires_grad)
 
@@ -68,42 +69,42 @@ def read_data(path, feature_scale=False):
         data['y'] = feature_scaling(data['y'])
         val_data['y'] = feature_scaling(val_data['y'])
 
-    data_tensor = torch.from_numpy(data.values).float().to(device)
-    train_x = data_tensor[:, 0].view(-1, 1)
-    train_y = data_tensor[:, 1].view(-1, 1)
-    train_size = train_x.size(0)
-    val_size = int(train_size * 0.1)
-    idx = torch.randperm(train_size)
-    val_x = train_x[idx[:val_size]]
-    val_y = train_y[idx[:val_size]]
-
-    return {
-        'train_x': train_x,
-        'train_y': train_y,
-        'val_x': val_x,
-        'val_y': val_y
-    }
+    x = data['x'].values.tolist()
+    y = data['y'].values.tolist()
+    return {'x': x, 'y': y}
 
 
 def train_epoch(train_x, train_y, epoch, batch_size, model, criterion,
                 optimizer):
     model.train()
+    losses = []
     for i in range(0, len(train_x) - 1, batch_size):
         optimizer.zero_grad()
         pred_y = model(train_x[i:i + batch_size])
         loss = criterion(pred_y, train_y[i:i + batch_size])
+        losses.append(loss.item())
         loss.backward()
         optimizer.step()
-    return loss
+    return losses
 
 
 def val_epoch(val_x, val_y, epoch, batch_size, model, criterion, optimizer):
     model.eval()
+    val_losses = []
     with torch.no_grad():
         for j in range(0, len(val_x) - 1, batch_size):
             pred_val_y = model(val_x[j:j + batch_size])
             val_loss = criterion(pred_val_y, val_y[j:j + batch_size])
-    return val_loss
+            val_losses.append(val_loss.item())
+    return val_losses
+
+
+def test(checkpoint_path):
+    cfg, model, optimizer = load_checkpoint(checkpoint_path)
+    model.eval()
+    print(model(torch.FloatTensor([680.])))
+    print(model(torch.FloatTensor([1000.])))
+    print(model(torch.FloatTensor([1200.])))
 
 
 def save_checkpoint(cfg, epoch, model, optimizer, loss, val_loss, model_name):
@@ -135,7 +136,19 @@ def load_checkpoint(path):
     return cfg, model, optimizer
 
 
-def train(cfg, train_x, train_y, val_x, val_y, model, criterion, optimizer):
+def max_abs_err(pred_y, true_y):
+    return max(abs(pred_y - true_y))
+
+
+def train(cfg, x, y, model, criterion, optimizer, val_ratio=0.1):
+    train_x = list_to_tensor(x, requires_grad=True)
+    train_y = list_to_tensor(y, requires_grad=False)
+    train_size = train_x.size(0)
+    val_size = int(train_size * val_ratio)
+    idx = torch.randperm(train_size)
+    val_x = train_x[idx[:val_size]]
+    val_y = train_y[idx[:val_size]]
+
     train_losses = []
     val_losses = []
     avg_train_losses = []
@@ -145,14 +158,14 @@ def train(cfg, train_x, train_y, val_x, val_y, model, criterion, optimizer):
     counter = 0
 
     for epoch in range(1, cfg.n_epochs + 1):
-        loss = train_epoch(train_x, train_y, epoch, cfg.batch_size, model,
-                           criterion, optimizer)
-        train_losses.append(loss.item())
+        losses = train_epoch(train_x, train_y, epoch, cfg.batch_size, model,
+                             criterion, optimizer)
+        train_losses.extend(losses)
 
         val_loss = val_epoch(val_x, val_y, epoch, cfg.batch_size, model,
                              criterion, optimizer)
 
-        val_losses.append(val_loss.item())
+        val_losses.extend(val_loss)
 
         train_loss = np.average(train_losses)
         val_loss = np.average(val_losses)
@@ -162,8 +175,7 @@ def train(cfg, train_x, train_y, val_x, val_y, model, criterion, optimizer):
         if best_loss is None:
             best_loss = val_loss
         elif val_loss < best_loss:
-            best_loss = val_loss
-            best_model = model
+            best_loss, best_model = val_loss, model
             model_name = f"{cfg.H}_{cfg.n_epochs}_{cfg.batch_size}.tar"
             counter = 0
         else:
@@ -184,42 +196,40 @@ def train(cfg, train_x, train_y, val_x, val_y, model, criterion, optimizer):
     return best_model
 
 
-def test(checkpoint_path):
-    cfg, model, optimizer = load_checkpoint(checkpoint_path)
-    model.eval()
-    print(model(torch.FloatTensor([680.])))
-    print(model(torch.FloatTensor([1000.])))
-    print(model(torch.FloatTensor([1200.])))
-
-
-def hybrid_training(cfg, train_x, train_y, val_x, val_y, threshold=1):
+def hybrid_training(cfg, x, y, threshold=100):
     M = len(cfg.stages)
     col_num = cfg.stages[1]
     tmp_x = [[[] for i in range(j)] for j in cfg.stages]
     tmp_y = [[[] for i in range(j)] for j in cfg.stages]
-    tmp_x[0][0] = train_x
-    tmp_y[0][0] = train_y
+    tmp_x[0][0] = x
+    tmp_y[0][0] = y
     index = [[None for i in range(j)] for j in cfg.stages]
     for i in range(M):
         for j in range(cfg.stages[i]):
             model, criterion, optimizer = build_model(cfg, level=i)
-            if len(tmp_x[i][j]) != 0:
-                index[i][j] = train(cfg, tmp_x[i][j], tmp_y[i][j], val_x, val_y,
-                                    model, criterion, optimizer)
+            if tmp_x[i][j]:
+                index[i][j] = train(cfg, tmp_x[i][j], tmp_y[i][j], model,
+                                    criterion, optimizer)
             if i < M - 1:
                 for r in range(len(tmp_x[i][j])):
-                    p = int(index[i][j](tmp_x[i][j][r]).item() * cfg.block_size)
+                    p = int(index[i][j](torch.FloatTensor([tmp_x[i][j][r]])))
                     if p > cfg.stages[i + 1] - 1:
                         p = cfg.stages[i + 1] - 1
 
                     tmp_x[i + 1][p].append(tmp_x[i][j][r])
                     tmp_y[i + 1][p].append(tmp_y[i][j][r])
-                for k in range(len(tmp_x[i + 1])):
-                    if tmp_x[i + 1][k]:
-                        tmp_x[i + 1][k] = torch.stack(tmp_x[i + 1][k])
-                        tmp_y[i + 1][k] = torch.stack(tmp_y[i + 1][k])
-                    else:
-                        tmp_x[i + 1][k] = torch.tensor([])
+    for j in range(len(index[M - 1])):
+        if index[M - 1][j]:
+            input_x = torch.FloatTensor([tmp_x[M - 1][j]]).view(-1, 1)
+            true_y = torch.FloatTensor(tmp_y[M - 1][j]).view(-1, 1)
+            pred_y = index[M - 1][j](input_x)
+            mae = max_abs_err(pred_y, true_y).item()
+            if mae > threshold:
+                btree = BTree(32)
+                for key, pos in zip(tmp_x[M - 1][j], tmp_y[M - 1][j]):
+                    btree.insert(Item(key, pos))
+                index[M - 1][j] = btree
+    print(index)
     return index
 
 
@@ -237,21 +247,18 @@ def build_model(cfg, level=0):
 
 
 def main(path, config):
-    dataset = read_data(path, feature_scale=True)
-    train_x = dataset['train_x']
-    train_y = dataset['train_y']
-    val_x = dataset['val_x']
-    val_y = dataset['val_y']
+    dataset = read_data(path, feature_scale=False)
+    x = dataset['x']
+    y = dataset['y']
 
     cfg = Cfg(config)
     print("-" * 20 + "Config" + "-" * 20)
     print(cfg)
 
     # model, criterion, optimizer = build_model(cfg, level=0)
+    # train(cfg, x, y, model, criterion, optimizer)
 
-    # train(cfg, train_x, train_y, val_x, val_y, model, criterion, optimizer)
-    # stages = [1, 100]
-    hybrid_training(cfg, train_x, train_y, val_x, val_y)
+    hybrid_training(cfg, x, y)
     # test('checkpoint/16_500_32.tar')
 
 
@@ -261,9 +268,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     config = {
-        'n_layer': [2, 1],
+        'n_layer': [3, 1],
         'D_in': 1,
-        'H': 32,
+        'H': 16,
         'D_out': 1,
         'n_epochs': 500,
         'batch_size': 32,
