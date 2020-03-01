@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import pickle
 import torch
 from torch.autograd import Variable
 from NN import NN
@@ -12,14 +13,38 @@ torch.manual_seed(1234)
 
 class HybridModel(object):
 
-    def __init__(self, cfg, data):
+    def __init__(self, cfg=None, data=None):
         super(HybridModel, self).__init__()
         self.cfg = cfg
         self.data = data
+        self.index = None
+        self.stage_num = None
+        self.tmp_x = None
+        self.tmp_y = None
+        if self.cfg:
+            self.set_cfg(self.cfg)
+        if self.data:
+            self.set_data(self.data)
+
+    def get_cfg(self):
+        return self.cfg
+
+    def set_cfg(self, cfg):
+        self.cfg = cfg
+        self.index = [[None for i in range(j)] for j in self.cfg.stages]
+        self.stage_num = len(self.cfg.stages)
+        self.tmp_x = [[[] for i in range(j)] for j in self.cfg.stages]
+        self.tmp_y = [[[] for i in range(j)] for j in self.cfg.stages]
+
+    def get_data(self):
+        return self.data
+
+    def set_data(self, data):
+        self.data = data
         assert "x" in self.data
         assert "y" in self.data
-        self.total_x = self.data['x']
-        self.total_y = self.data['y']
+        self.tmp_x[0][0] = self.data['x']
+        self.tmp_y[0][0] = self.data['y']
 
     def build_model(self, level=0):
         model = NN(self.cfg.n_layer[level], self.cfg.D_in, self.cfg.H,
@@ -87,7 +112,7 @@ class HybridModel(object):
         avg_train_losses = []
         avg_val_losses = []
         best_loss = None
-        best_model = None
+        best_model = model
         counter = 0
 
         for epoch in range(1, self.cfg.n_epochs + 1):
@@ -108,13 +133,12 @@ class HybridModel(object):
                 best_loss = val_loss
             elif val_loss < best_loss:
                 best_loss, best_model = val_loss, model
-                model_name = f"{self.cfg.H}_{self.cfg.n_epochs}_{self.cfg.batch_size}.tar"
                 counter = 0
             else:
                 counter += 1
             if counter == self.cfg.stop_step:
                 print(f'Early stop at epoch: {epoch}\tBest loss:{best_loss:3f}')
-                break
+                return best_model
 
             if (epoch % 10 == 0):
                 print(
@@ -123,84 +147,101 @@ class HybridModel(object):
             # clear losses data
             train_losses = []
             valid_losses = []
-        # self.save_checkpoint(epoch, best_model, optimizer, train_loss,
-        #  val_loss, model_name)
         return best_model
 
     def hybrid_training(self, threshold=100):
-        M = len(self.cfg.stages)
-        tmp_x = [[[] for i in range(j)] for j in self.cfg.stages]
-        tmp_y = [[[] for i in range(j)] for j in self.cfg.stages]
-        tmp_x[0][0] = self.total_x
-        tmp_y[0][0] = self.total_y
-        index = [[None for i in range(j)] for j in self.cfg.stages]
-
-        for i in range(M):
+        for i in range(self.stage_num):
             for j in range(self.cfg.stages[i]):
                 # Build model according to different stages
                 model, criterion, optimizer = self.build_model(level=i)
 
                 # In case of empty tmp_x train data
-                if tmp_x[i][j]:
-                    index[i][j] = self.train(tmp_x[i][j],
-                                             tmp_y[i][j],
-                                             model,
-                                             criterion,
-                                             optimizer,
-                                             val_ratio=0.1)
+                if self.tmp_x[i][j]:
+                    self.index[i][j] = self.train(self.tmp_x[i][j],
+                                                  self.tmp_y[i][j],
+                                                  model,
+                                                  criterion,
+                                                  optimizer,
+                                                  val_ratio=0.1)
 
                 # Update training example for next level model
-                if i < M - 1:
-                    for r in range(len(tmp_x[i][j])):
-                        p = int(index[i][j](torch.FloatTensor([tmp_x[i][j][r]
-                                                              ])))
+                if i < self.stage_num - 1:
+                    for r in range(len(self.tmp_x[i][j])):
+                        p = self.index[i][j](torch.FloatTensor(
+                            [self.tmp_x[i][j][r]]))
                         if self.cfg.feature_scale == True:
-                            p *= self.cfg.stages[i + 1]
+                            p = int(p * self.cfg.stages[i + 1])
+                        else:
+                            p = int(p)
                         if p > self.cfg.stages[i + 1] - 1:
                             p = self.cfg.stages[i + 1] - 1
 
-                        tmp_x[i + 1][p].append(tmp_x[i][j][r])
-                        tmp_y[i + 1][p].append(tmp_y[i][j][r])
+                        self.tmp_x[i + 1][p].append(self.tmp_x[i][j][r])
+                        self.tmp_y[i + 1][p].append(self.tmp_y[i][j][r])
 
         # If MAE(Maximum Absolute Error) of a ML model is greater than threshold, then we replace it with a BTree structure
-        for j in range(len(index[M - 1])):
-            if index[M - 1][j]:
-                input_x = torch.FloatTensor([tmp_x[M - 1][j]]).view(-1, 1)
-                true_y = torch.FloatTensor(tmp_y[M - 1][j]).view(-1, 1)
-                pred_y = index[M - 1][j](input_x)
+        last = self.stage_num - 1
+        for j in range(len(self.index[last])):
+            if self.index[last][j]:
+                input_x = torch.FloatTensor([self.tmp_x[last][j]]).view(-1, 1)
+                true_y = torch.FloatTensor(self.tmp_y[last][j]).view(-1, 1)
+                pred_y = self.index[last][j](input_x)
                 mae = self.max_abs_err(pred_y, true_y).item()
                 if mae > threshold:
                     btree = BTree(32)
-                    for key, pos in zip(tmp_x[M - 1][j], tmp_y[M - 1][j]):
+                    for key, pos in zip(self.tmp_x[last][j],
+                                        self.tmp_y[last][j]):
                         btree.insert(Item(key, pos))
-                    index[M - 1][j] = btree
-        print(index)
-        return index
+                    self.index[last][j] = btree
+        self.save_index()
 
-    def save_checkpoint(self, epoch, model, optimizer, loss, val_loss,
-                        model_name):
-        checkpoint_stats = {
-            'cfg': self.cfg,
-            'epoch': epoch,
-            'model': model,
-            'optimizer': optimizer,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'loss': loss,
-            'val_loss': val_loss
-        }
+    def search(self, key):
+        if not torch.is_tensor(key):
+            key = torch.tensor([key], dtype=torch.float32)
+        search_result = None
+
+        p = self.index[0][0](key)
+        for i in range(1, self.stage_num):
+            if i < self.stage_num:
+                model_index = int(p * self.cfg.stages[i])
+                next_model = self.index[i][model_index]
+                if isinstance(next_model, NN):
+                    p = int(next_model(key) * self.cfg.stages[i])
+                elif isinstance(next_model, BTree):
+                    p = int(next_model.search(key) * self.cfg.stages[i])
+            search_result = p
+
+        return search_result
+
+    def save_index(self):
+        index_stats = {'cfg': self.cfg, 'index': self.index, 'weights': []}
+
+        # Save weights for each model
+        for stage in self.index:
+            for model in stage:
+                if isinstance(model, NN):
+                    index_stats['weights'].append(model.state_dict())
+
+        model_name = f"stage[{self.cfg.stages[0]}_{self.cfg.stages[1]}]_{self.cfg.H}_{self.cfg.n_epochs}_{self.cfg.batch_size}.pkl"
         path = "./checkpoint"
         if not os.path.exists(path):
             os.makedirs(path)
         else:
             path = os.path.join(path, model_name)
-        torch.save(checkpoint_stats, path)
+        with open(path, 'wb') as out_file:
+            pickle.dump(index_stats, out_file)
+            print(f'{path} saved')
 
-    def load_checkpoint(self, path):
-        checkpoint = torch.load(path)
-        cfg = checkpoint['cfg']
-        model = checkpoint['model']
-        optimizer = checkpoint['optimizer']
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        return cfg, model, optimizer
+    def load_index(self, path):
+        with open(path, 'rb') as in_file:
+            print(f'Loading {path}')
+            index_stats = pickle.load(in_file)
+        self.cfg = index_stats['cfg']
+        self.set_cfg(self.cfg)
+        self.index = index_stats['index']
+
+        # Load weights for each model
+        for stage in self.index:
+            for model in stage:
+                if isinstance(model, NN):
+                    model.load_state_dict(index_stats['weights'].pop(0))

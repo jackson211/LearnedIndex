@@ -28,6 +28,14 @@ def read_data(path, feature_scale=False):
     return {'x': x, 'y': y}
 
 
+def plot(x, y, pred_y):
+    import matplotlib.pyplot as plt
+    plt.plot(x, y, label="true pos")
+    plt.plot(x, pred_y, label="predicted pos")
+    plt.legend(loc="upper left")
+    plt.show()
+
+
 def main(path, config):
     cfg = Cfg(config)
     print("-" * 20 + "config" + "-" * 20)
@@ -35,30 +43,27 @@ def main(path, config):
 
     dataset = read_data(path, feature_scale=cfg.feature_scale)
 
-    # model, criterion, optimizer = build_model(cfg, level=0)
-    # best_model = train(cfg, x, y, model, criterion, optimizer)
-    # cfg, model, optimizer = load_checkpoint('checkpoint/16_500_32.tar')
-    # train_x = list_to_tensor(x, requires_grad=true)
-    # train_y = list_to_tensor(y, requires_grad=false)
-    # val_x, val_y = create_test(train_x, train_y, val_ratio=0.1)
-    # val_losses = val_epoch(val_x, val_y, cfg.batch_size, model, max_abs_err)
-    # print(val_losses)
-    # print(np.average(val_losses))
-    # test(val_x, val_y, best_model)
-
-    hm = hybridmodel(cfg, dataset)
+    hm = HybridModel(cfg=cfg, data=dataset)
     hm.hybrid_training()
+
+    hm = HybridModel()
+    hm.load_index("checkpoint/stage[1_10]_32_500_32.pkl")
+    print(hm.search(1000))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--path', '-p', required=True, help="Data file path")
+    parser.add_argument('--config',
+                        '-c',
+                        required=False,
+                        help="Config file path")
     args = parser.parse_args()
 
-    config = {
-        'n_layer': [3, 1],
+    args.config = {
+        'n_layer': [2, 1],
         'D_in': 1,
-        'H': 16,
+        'H': 32,
         'D_out': 1,
         'n_epochs': 500,
         'batch_size': 32,
@@ -72,4 +77,4 @@ if __name__ == "__main__":
     }
     # with open('config.yaml', 'w') as f:
     #     yaml.dump(config, f)
-    main(args.path, config)
+    main(args.path, args.config)
