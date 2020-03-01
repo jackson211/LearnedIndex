@@ -1,3 +1,4 @@
+import datetime
 import pandas as pd
 import yaml
 import argparse
@@ -43,12 +44,15 @@ def main(path, config):
 
     dataset = read_data(path, feature_scale=cfg.feature_scale)
 
-    hm = HybridModel(cfg=cfg, data=dataset)
-    hm.hybrid_training()
+    # hm = HybridModel(cfg=cfg, data=dataset)
+    # hm.hybrid_training()
 
     hm = HybridModel()
     hm.load_index("checkpoint/stage[1_10]_32_500_32.pkl")
+    search_start = datetime.datetime.now()
     print(hm.search(1000))
+    search_end = datetime.datetime.now()
+    print("Keys' search time: " + str(search_end - search_start))
 
 
 if __name__ == "__main__":
@@ -75,6 +79,6 @@ if __name__ == "__main__":
         'block_size': 100,
         'feature_scale': True
     }
-    # with open('config.yaml', 'w') as f:
-    #     yaml.dump(config, f)
+    # with open('config/normal_config.yaml', 'w') as f:
+    #     yaml.dump(args.config, f)
     main(args.path, args.config)
